@@ -2,7 +2,7 @@
 
 Describe **cómo fluyen los datos** desde Kaggle hasta un modelo evaluado y **dónde se ejecuta** cada etapa. La física que motiva las decisiones está en [01](01_domain_theory.md); los contratos de cada módulo, en [03](03_logical_architecture.md).
 
-> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py` y `src/models_dl.py` están implementados.
+> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py`, `src/models_dl.py`, `src/ensemble.py` y `src/visualize.py` están implementados.
 
 ---
 
@@ -28,6 +28,10 @@ flowchart LR
     PQ --> X["Baseline XGBoost<br/>CPU"]
     PQ --> W["Ventanas 3D<br/>al vuelo"]
     W --> D["LSTM y CNN 1D<br/>GPU"]
+    D --> EN["Ensemble<br/>convexo"]
+    X --> VI["Gráficos de<br/>evaluación"]
+    D --> VI
+    EN --> VI
 ```
 
 ### Código y datos viven separados
@@ -35,7 +39,7 @@ flowchart LR
 | | Ubicación en Colab | Persistencia | Versionado |
 |---|---|---|---|
 | Código | `/content/nasa-turbofan-rul` (clon de Git) | Efímera, se vuelve a clonar | Git |
-| Datos y modelos | `/content/drive/MyDrive/nasa_rul/` | Permanente | No; se regeneran con el ETL |
+| Datos, modelos, métricas y gráficos | `/content/drive/MyDrive/nasa_rul/` | Permanente | No; se regeneran con el código |
 
 `src/config.py` resuelve la raíz de almacenamiento: variable `NASA_RUL_ROOT` → Drive si es Colab → raíz del repo si es local. El resto del código nunca escribe rutas absolutas.
 
@@ -52,9 +56,16 @@ flowchart LR
 │   ├── scaler_FD001.joblib
 │   ├── xgb_baseline_FD001.json
 │   ├── lstm_FD001.pt
+│   ├── lstm_FD001_asym.pt
 │   └── cnn1d_FD001.pt
-└── metrics/
-    └── xgb_baseline_FD001.json   # métricas, hiperparámetros y top features
+├── metrics/
+│   ├── xgb_baseline_FD001.json   # métricas, hiperparámetros y top features
+│   ├── lstm_FD001.json           # métricas, hiperparámetros y curvas
+│   ├── lstm_FD001_asym.json
+│   ├── cnn1d_FD001.json
+│   └── ensemble_FD001.json       # métricas y pesos
+└── reports/
+    └── figures/                  # los 4 PNG de src.visualize
 ```
 
 ---
@@ -201,6 +212,31 @@ Cada fila se repite hasta 30 veces en los tensores. Por eso los tensores se arma
 - **Dos variantes en Test:** contra `rul` (recortado, métrica principal) y contra `rul_raw` (sin recortar). Once motores superan los 125 ciclos y no pueden acertarse en la segunda.
 - **Cuidado con el score en Val.** Es una suma: en `val_all` acumula 4.070 filas, en `val_truncated` 20 motores y en Test 100. Solo se comparan scores con el mismo `n`.
 
+### 5.1 Ensemble
+
+`python -m src.ensemble --subset FD001 --models lstm_FD001 lstm_FD001_asym cnn1d_FD001` recarga los checkpoints, ajusta los pesos y evalúa. No reentrena ninguna red.
+
+| Paso | Conjunto | Detalle |
+|---|---|---|
+| 1. Ajuste de pesos | Solo `val_truncated` | Combinación convexa (`wᵢ ≥ 0`, `Σ wᵢ = 1`) que minimiza el RMSE con SLSQP |
+| 2. Evaluación | Todos | Con los pesos ya fijados; Test se predice recién en este paso |
+
+En FD001 los pesos son 0.7825 (LSTM), 0.1938 (LSTM asimétrica) y 0.0236 (CNN 1D). Los resultados están en el [README](../README.md#resultados-en-fd001).
+
+### 5.2 Gráficos de evaluación
+
+`python -m src.visualize --subset FD001` lee los reportes de `metrics/` y escribe en `reports/figures/`. No entrena ni ajusta nada.
+
+| Gráfico | Fuente | Si falta algo |
+|---|---|---|
+| `model_comparison_{subset}.png` | `test_last_cycle` de los reportes | Grafica los modelos con reporte |
+| `rul_pred_vs_true_{subset}.png` | Predicciones de Test recalculadas con `models/` y `data/processed/` | Usa el siguiente mejor modelo; si ninguno se puede cargar, se omite |
+| `error_distribution_{subset}.png` | Las mismas predicciones | Ídem |
+| `training_curves_{subset}.png` | `history.val_rmse` de las redes | Grafica las redes con reporte; si no hay ninguna, se omite |
+
+- **Qué modelo se grafica por motor.** El ensemble si existe; si no, el de menor RMSE en **`val_truncated`**. Elegirlo por Test sería leakage.
+- **Control de coherencia.** Los reportes no guardan predicciones. Si el RMSE recalculado se aparta más de 0,001 ciclos del reportado, se avisa: el modelo o los datos son de otra corrida.
+
 ---
 
 ## 6. Ejecución en Google Colab
@@ -217,15 +253,17 @@ flowchart TB
     end
     subgraph DRIVE["GOOGLE DRIVE: nasa_rul/"]
         D1[("data/processed/*.parquet")]
-        D2[("models/")]
+        D2[("models/ y metrics/")]
+        D3[("reports/figures/")]
     end
     subgraph GPU["SESIÓN 2: runtime GPU"]
         direction TB
         G1["Montar Drive y clonar repo"] --> G2["Leer Parquet<br/>armar ventanas 3D"]
         G2 --> G3["Entrenar LSTM"]
         G2 --> G4["Entrenar CNN 1D"]
-        G3 --> G5["Comparar modelos"]
+        G3 --> G5["Ensemble"]
         G4 --> G5
+        G5 --> G6["Gráficos"]
     end
     C2 --> D1
     C4 --> D2
@@ -233,6 +271,8 @@ flowchart TB
     G3 --> D2
     G4 --> D2
     D2 --> G5
+    D2 --> G6
+    G6 --> D3
 ```
 
 | Etapa | Runtime | Motivo |
@@ -241,6 +281,7 @@ flowchart TB
 | EDA | CPU | Exploración larga y con pausas: lo más caro de hacer con GPU |
 | XGBoost | CPU | Con unas 16.500 filas, `tree_method="hist"` en CPU alcanza |
 | LSTM y CNN 1D | GPU | Muchas épocas de álgebra tensorial |
+| Ensemble y gráficos | CPU o GPU | Solo inferencia; se corren en la sesión de GPU por continuidad |
 
 Reglas prácticas:
 

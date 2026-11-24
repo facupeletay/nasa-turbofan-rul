@@ -8,6 +8,7 @@ models/*.pt
 models/*.json
 models/*.joblib
 metrics/*.json
+reports/figures/*.png
 
 # Python
 .venv/

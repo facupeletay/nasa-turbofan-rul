@@ -13,6 +13,9 @@ flowchart TB
     subgraph ORQ["Capa de orquestación"]
         NB["notebooks/colab_runner.ipynb"]
     end
+    subgraph REP["Capa de reporte"]
+        VIS["visualize"]
+    end
     subgraph MOD["Capa de modelado"]
         XGB["baseline_xgb"]
         DL["models_dl"]
@@ -31,6 +34,13 @@ flowchart TB
     NB --> XGB
     NB --> DL
     NB --> ENS
+    NB --> VIS
+    VIS --> ENS
+    VIS --> XGB
+    VIS --> DL
+    VIS --> ETL
+    VIS --> MET
+    VIS --> CFG
     XGB --> ETL
     XGB --> MET
     ENS --> DL
@@ -54,6 +64,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 - `etl` no conoce ningún modelo.
 - `baseline_xgb` y `models_dl` no se conocen entre sí. Comparten datos y métricas, nada más.
 - `ensemble` usa modelos ya entrenados por `models_dl`; no entrena ni modifica ninguno.
+- `visualize` consume reportes y modelos terminados. Ningún módulo depende de él.
 - El notebook **orquesta, no implementa**. Si una celda crece, su lógica pasa a `src/`.
 
 | Módulo | Estado | Dependencias externas |
@@ -65,6 +76,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 | `baseline_xgb` | ✅ | pandas, xgboost |
 | `models_dl` | ✅ | numpy, torch |
 | `ensemble` | ✅ | numpy, scipy, torch |
+| `visualize` | ✅ | numpy, matplotlib, seaborn, xgboost |
 
 ---
 
@@ -254,6 +266,24 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 
 **Sesgo de selección.** `val_truncated` ya eligió la época de cada miembro y además ajusta los pesos, con solo 20 motores: su valor para el ensemble es optimista. Qué modelos combinar y con qué `--optimize` también debe decidirse con Val; elegirlos mirando Test sería leakage. Cada corrida sobrescribe el reporte de su subset.
 
+### 3.8 `visualize` ✅
+
+| | |
+|---|---|
+| **Responsabilidad** | Graficar la evaluación de modelos ya entrenados |
+| **Entradas** | Reportes de `metrics/`; para los gráficos por motor, además los modelos de `models/` y los artefactos del ETL |
+| **Salidas** | `reports/figures/{gráfico}_{subset}.png`, a 150 dpi |
+| **Funciones** | `load_reports`, `rank_runs`, `predict_test`, `predict_best`, `plot_model_comparison`, `plot_pred_vs_true`, `plot_error_distribution`, `plot_training_curves`, `run_visualize`; clases `RunSpec` y `TestPredictions` |
+| **Anti-leakage** | El modelo de los gráficos por motor se elige por `val_truncated` |
+| **Validaciones** | Avisa si el RMSE recalculado no coincide con el del reporte. Sin ningún reporte, falla con un error claro |
+| **CLI** | `--subset` |
+
+**Corridas conocidas.** Grafica las cinco de `RUNS`: `xgb_baseline`, `cnn1d`, `lstm` con tag `asym`, `lstm` y `ensemble`. Una corrida con otro tag no aparece hasta agregarla a esa lista.
+
+**Datos parciales.** Un reporte faltante o ilegible se omite con un aviso, y si el mejor modelo no se puede cargar se usa el siguiente. Cada gráfico se genera o se omite por separado.
+
+**Error nulo.** El recorte en 125 hace posible `d = 0` exacto. En el histograma cuenta como zona segura, porque no suma al NASA score.
+
 ---
 
 ## 4. Reglas anti-leakage por módulo
@@ -268,6 +298,7 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 | `baseline_xgb`, `models_dl` | Identificadores o targets como features | Solo se usa `feature_cols` |
 | `models_dl` | Elegir la época según Test | Scheduler, early stopping y checkpoint solo con `val_truncated` |
 | `ensemble` | Ajustar los pesos según Test | `optimize_weights` recibe solo `val_truncated` |
+| `visualize` | Elegir el modelo a graficar según Test | `rank_runs` mira solo `val_truncated` |
 
 ---
 

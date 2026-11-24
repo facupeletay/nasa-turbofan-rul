@@ -58,6 +58,7 @@ RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 MODELS_DIR = STORAGE_ROOT / "models"
 METRICS_DIR = STORAGE_ROOT / "metrics"
+FIGURES_DIR = STORAGE_ROOT / "reports" / "figures"
 
 # --------------------------------------------------------------------------
 # Dataset
@@ -161,6 +162,11 @@ def metrics_path(name: str, subset: str = DEFAULT_SUBSET, tag: str = "") -> Path
     return METRICS_DIR / f"{run_name(name, subset, tag)}.json"
 
 
+def figure_path(name: str, subset: str = DEFAULT_SUBSET) -> Path:
+    """Ruta de un gráfico, p. ej. `reports/figures/training_curves_FD001.png`."""
+    return FIGURES_DIR / f"{run_name(name, subset)}.png"
+
+
 def ensure_directories() -> None:
     """Crea las carpetas de almacenamiento si no existen.
 
@@ -174,7 +180,9 @@ def ensure_directories() -> None:
             "Google Drive no está montado. Ejecutá primero: "
             "from google.colab import drive; drive.mount('/content/drive')"
         )
-    for directory in (RAW_DIR, PROCESSED_DIR, MODELS_DIR, METRICS_DIR):
+    for directory in (
+        RAW_DIR, PROCESSED_DIR, MODELS_DIR, METRICS_DIR, FIGURES_DIR
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -188,6 +196,7 @@ def describe() -> str:
         f"Procesados   : {PROCESSED_DIR}",
         f"Modelos      : {MODELS_DIR}",
         f"Métricas     : {METRICS_DIR}",
+        f"Gráficos     : {FIGURES_DIR}",
         f"RUL_CLIP={RUL_CLIP}  WINDOW_SIZE={WINDOW_SIZE}  "
         f"VAL_SIZE={VAL_SIZE}  SEED={RANDOM_SEED}",
     ])

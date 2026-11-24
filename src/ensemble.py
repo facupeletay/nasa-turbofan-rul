@@ -93,8 +93,6 @@ def load_members(
     names: list[str], subset: str, device: torch.device
 ) -> list[Member]:
     """Reconstruye cada modelo y verifica que sea compatible con los datos actuales."""
-    if len(names) < 2:
-        raise ValueError("El ensemble necesita al menos dos modelos")
     if len(set(names)) != len(names):
         raise ValueError(f"Hay modelos repetidos: {names}")
 
@@ -291,6 +289,8 @@ def run_ensemble(
     Returns:
         El mismo reporte que se guarda en `metrics/ensemble_<subset>.json`.
     """
+    if len(model_names) < 2:
+        raise ValueError("El ensemble necesita al menos dos modelos")
     config.ensure_directories()
     device = get_device()
     members = load_members(model_names, subset, device)
