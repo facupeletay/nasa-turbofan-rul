@@ -55,7 +55,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 | `metrics` | ✅ | numpy |
 | `etl` | ✅ | kagglehub, pandas, pyarrow, scikit-learn, joblib |
 | `dataset` | 🚧 | numpy, pandas, torch |
-| `baseline_xgb` | 🚧 | pandas, xgboost |
+| `baseline_xgb` | ✅ | pandas, xgboost |
 | `models_dl` | 🚧 | numpy, torch |
 
 ---
@@ -68,7 +68,7 @@ Notación: `B` = batch, `W` = ventana (30), `F` = features (15 en FD001), `N` = 
 |---|---|---|---|
 | Tabla cruda | `(N, 26)` | float / int | `.txt` → `etl` |
 | Tabla procesada | `(N, 2 + F + 2)` | float64 las features, int64 el resto | `etl` → `dataset`, `baseline_xgb` |
-| Matriz tabular | `(N, F · (1 + 3 · n_ventanas))` | float | `baseline_xgb` (interno) |
+| Matriz tabular | `(N, F · (1 + 2 · n_ventanas))` | float | `baseline_xgb` (interno) |
 | Ventana | `(W, F)` | float32 | `dataset` (interno) |
 | **Batch de entrada** | **`(B, W, F)`** = `(batch_size, window_size, num_features)` | float32 | `dataset` → `models_dl` |
 | **Batch de target** | **`(B,)`** | float32 | `dataset` → `models_dl` |
@@ -155,15 +155,17 @@ En FD001 resultan **14.241 ventanas de Train y 3.490 de Val**. El `shuffle` mezc
 | **Validaciones** | Falla ante formas incompatibles, vacíos, NaN o infinitos |
 | **Convención** | `d = y_pred − y_true`; `d > 0` es tardía |
 
-### 3.5 `baseline_xgb` 🚧
+### 3.5 `baseline_xgb` ✅
 
 | | |
 |---|---|
 | **Responsabilidad** | Establecer el piso de desempeño que las redes deben superar |
-| **Entradas** | `ETLResult` |
-| **Salidas** | `models/xgb_FD001.json` y métricas de Val y Test |
-| **Features** | Valor instantáneo + media, desvío y pendiente en ventanas de 5, 10, 20 y 30 ciclos: `15 × (1 + 3 × 4) = 195` |
-| **Anti-leakage** | Rolling causal y por motor; early stopping sobre Val |
+| **Entradas** | Artefactos del ETL, vía `load_artifacts(subset)` |
+| **Salidas** | `models/xgb_baseline_FD001.json` y `metrics/xgb_baseline_FD001.json` (métricas, hiperparámetros y top 15 por gain) |
+| **Funciones** | `add_rolling_features`, `get_model_feature_columns`, `train_xgb`, `predict_rul`, `evaluate_xgb`, `top_features_by_gain`, `run_baseline` |
+| **Features** | Valor instantáneo + media y desvío en ventanas de 5 y 15 ciclos: `15 × (1 + 2 × 2) = 75` |
+| **Anti-leakage** | Rolling causal y por motor; sin `unit_id`, `cycle` ni RUL como features; early stopping sobre Val |
+| **CLI** | `--subset`, `--n-estimators`, `--max-depth`, `--learning-rate`, `--windows` |
 
 ### 3.6 `models_dl` 🚧
 
@@ -216,10 +218,10 @@ En FD001 resultan **14.241 ventanas de Train y 3.490 de Val**. El `shuffle` mezc
 
 | Aspecto | XGBoost + rolling | LSTM | CNN 1D |
 |---|---|---|---|
-| Entrada | `(N, 195)` | `(B, 30, 15)` | `(B, 30, 15)` |
-| Representación del tiempo | Manual: media, desvío y pendiente | Aprendida: estado recurrente | Aprendida: filtros locales |
+| Entrada | `(N, 75)` | `(B, 30, 15)` | `(B, 30, 15)` |
+| Representación del tiempo | Manual: media y desvío móviles | Aprendida: estado recurrente | Aprendida: filtros locales |
 | Sesgo inductivo | Umbrales e interacciones entre estadísticos | Orden y memoria a lo largo de la ventana | Patrones locales invariantes a la posición |
-| Campo temporal | El de la mayor ventana (30) | Toda la ventana | `1 + 3 × (5 − 1) = 13` pasos con 3 capas y k = 5; el pooling cubre el resto |
+| Campo temporal | El de la mayor ventana (15 por defecto) | Toda la ventana | `1 + 3 × (5 − 1) = 13` pasos con 3 capas y k = 5; el pooling cubre el resto |
 | Paralelismo temporal | No aplica | Bajo: secuencial por paso | Alto |
 | Extrapolación | Nula: no predice fuera del rango visto | Posible, no garantizada | Posible, no garantizada |
 | Interpretabilidad | Alta (importancias, SHAP) | Baja | Media (filtros, saliencia) |
@@ -231,7 +233,7 @@ En FD001 resultan **14.241 ventanas de Train y 3.490 de Val**. El `shuffle` mezc
 
 La degradación de FD001 es **lenta, suave, casi monótona y ruidosa**. De ahí se desprenden hipótesis, que el proyecto debe contrastar y no dar por ciertas:
 
-- **H1. El baseline tabular será competitivo.** La media y la pendiente móviles capturan bien una tendencia suave, y con solo 80 motores independientes hay pocos datos para redes grandes.
+- **H1. El baseline tabular será competitivo.** La media móvil captura bien una tendencia suave, y con solo 80 motores independientes hay pocos datos para redes grandes.
 - **H2. La CNN 1D entrenará más rápido que la LSTM con un desempeño similar.** Sus filtros actúan como suavizadores aprendidos, adecuados para este tipo de señal.
 - **H3. La LSTM aportará más donde importa el orden**, por ejemplo con `s_9` y `s_14`, cuyo sentido cambia según el motor.
 - **H4. La diferencia entre modelos se verá más en el NASA score que en el RMSE**, porque el score está dominado por los errores tardíos extremos.

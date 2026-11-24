@@ -56,6 +56,7 @@ DATA_DIR = STORAGE_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 MODELS_DIR = STORAGE_ROOT / "models"
+METRICS_DIR = STORAGE_ROOT / "metrics"
 
 # --------------------------------------------------------------------------
 # Dataset
@@ -96,7 +97,7 @@ RANDOM_SEED = 42
 ZERO_VARIANCE_TOL = 1e-10
 
 # Ventanas (en ciclos) de las rolling features del baseline tabular
-ROLLING_WINDOWS = (5, 10, 20, 30)
+ROLLING_WINDOWS = (5, 15)
 
 # Constantes de decaimiento del NASA Asymmetric Score
 SCORE_A_EARLY = 13.0  # d < 0: predicción temprana
@@ -142,6 +143,11 @@ def model_path(name: str, subset: str = DEFAULT_SUBSET, ext: str = "pt") -> Path
     return MODELS_DIR / f"{name}_{validate_subset(subset)}.{ext}"
 
 
+def metrics_path(name: str, subset: str = DEFAULT_SUBSET) -> Path:
+    """Ruta del reporte de métricas, p. ej. `metrics/xgb_baseline_FD001.json`."""
+    return METRICS_DIR / f"{name}_{validate_subset(subset)}.json"
+
+
 def ensure_directories() -> None:
     """Crea las carpetas de almacenamiento si no existen.
 
@@ -155,7 +161,7 @@ def ensure_directories() -> None:
             "Google Drive no está montado. Ejecutá primero: "
             "from google.colab import drive; drive.mount('/content/drive')"
         )
-    for directory in (RAW_DIR, PROCESSED_DIR, MODELS_DIR):
+    for directory in (RAW_DIR, PROCESSED_DIR, MODELS_DIR, METRICS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -168,6 +174,7 @@ def describe() -> str:
         f"Datos crudos : {RAW_DIR}",
         f"Procesados   : {PROCESSED_DIR}",
         f"Modelos      : {MODELS_DIR}",
+        f"Métricas     : {METRICS_DIR}",
         f"RUL_CLIP={RUL_CLIP}  WINDOW_SIZE={WINDOW_SIZE}  "
         f"VAL_SIZE={VAL_SIZE}  SEED={RANDOM_SEED}",
     ])

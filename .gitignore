@@ -7,6 +7,7 @@ data/**/*.txt
 models/*.pt
 models/*.json
 models/*.joblib
+metrics/*.json
 
 # Python
 .venv/

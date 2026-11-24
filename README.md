@@ -9,9 +9,9 @@ Dado el historial de sensores de un motor, el objetivo es predecir **cuántos ci
 | Componente | Estado |
 |---|---|
 | Documentación de dominio y arquitectura | ✅ Completa |
-| `src/config.py`, `src/metrics.py`, `src/etl.py` | ✅ Implementados |
-| `src/dataset.py`, `src/baseline_xgb.py`, `src/models_dl.py` | 🚧 Firmas y contratos definidos |
-| `notebooks/colab_runner.ipynb` | 🚧 Preparación y ETL funcionales; el resto depende de los módulos anteriores |
+| `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/baseline_xgb.py` | ✅ Implementados |
+| `src/dataset.py`, `src/models_dl.py` | 🚧 Firmas y contratos definidos |
+| `notebooks/colab_runner.ipynb` | 🚧 Preparación, ETL y baseline funcionales; el resto depende de los módulos anteriores |
 
 ## Documentación
 
@@ -68,7 +68,7 @@ nasa-turbofan-rul/
 └── README.md
 ```
 
-Los datos y los modelos **no se versionan**: viven en `/content/drive/MyDrive/nasa_rul/` y se regeneran con el ETL.
+Los datos, los modelos y las métricas **no se versionan**: viven en `/content/drive/MyDrive/nasa_rul/` y se regeneran con el código.
 
 ## Uso
 
@@ -89,6 +89,7 @@ pip install -r requirements.txt
 
 python -m src.config           # Muestra las rutas activas
 python -m src.etl              # ETL de FD001 (--subset para otro)
+python -m src.baseline_xgb     # Baseline XGBoost (--help para ver opciones)
 ```
 
 Para guardar datos y modelos en otra ubicación, definir la variable de entorno `NASA_RUL_ROOT`.

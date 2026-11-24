@@ -2,7 +2,7 @@
 
 Describe **cómo fluyen los datos** desde Kaggle hasta un modelo evaluado y **dónde se ejecuta** cada etapa. La física que motiva las decisiones está en [01](01_domain_theory.md); los contratos de cada módulo, en [03](03_logical_architecture.md).
 
-> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py` y `src/etl.py` están implementados; los demás módulos tienen firmas y docstrings, y se implementan paso a paso.
+> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py` y `src/baseline_xgb.py` están implementados; los demás módulos tienen firmas y docstrings, y se implementan paso a paso.
 
 ---
 
@@ -48,11 +48,13 @@ flowchart LR
 │       ├── val_FD001.parquet
 │       ├── test_FD001.parquet
 │       └── etl_metadata_FD001.json
-└── models/
-    ├── scaler_FD001.joblib
-    ├── xgb_FD001.json
-    ├── lstm_FD001.pt
-    └── cnn1d_FD001.pt
+├── models/
+│   ├── scaler_FD001.joblib
+│   ├── xgb_baseline_FD001.json
+│   ├── lstm_FD001.pt
+│   └── cnn1d_FD001.pt
+└── metrics/
+    └── xgb_baseline_FD001.json   # métricas, hiperparámetros y top features
 ```
 
 ---
@@ -150,7 +152,7 @@ Se calcula **solo en Train** y se aplica la misma lista a Val y Test. En FD001 s
 | 2 | Poda decidida solo con Train | `select_feature_columns` recibe solo Train |
 | 3 | Scaler ajustado solo con Train | `scaler.n_samples_seen_ == len(train)` |
 | 4 | Ventanas y rolling features dentro de cada motor | Ninguna ventana mezcla `unit_id` |
-| 5 | Solo información pasada | Rolling sin `center=True`; ventana `[t−29, t]` |
+| 5 | Solo información pasada | Rolling sin `center=True`; ventana `[t − w + 1, t]` |
 | 6 | `unit_id`, `cycle`, `rul`, `rul_raw` fuera de las features | Intersección vacía con `feature_cols` |
 | 7 | Test se mira una sola vez | Early stopping y tuning usan Val |
 
@@ -186,13 +188,18 @@ Cada fila se repite hasta 30 veces en los tensores. Armar una ventana es un *sli
 
 | Conjunto | Filas evaluadas | Uso |
 |---|---|---|
-| Val | Todas con `cycle >= 30` (3.490 en FD001) | Early stopping, tuning y comparación |
-| Test | **Último ciclo de cada motor** (100 predicciones) | Reporte final, una única vez |
+| `val_all` | Todos los ciclos de Val (4.070 en FD001) | Rendimiento general; early stopping del baseline |
+| `val_last_cycle` | Último ciclo de cada motor de Val (20) | Error en el instante de la falla |
+| `val_truncated` | Ciclos `>= 30` de Val (3.490), ponderados por motor | Comparación entre modelos y estimación previa de Test |
+| `test_last_cycle` | **Último ciclo de cada motor de Test** (100) | Métrica oficial, reporte final |
+| `test_last_cycle_raw` | Igual, contra el RUL sin recortar | Reporte complementario |
 
 - **Mismas filas para todos los modelos.** XGBoost puede predecir desde el ciclo 1 y las redes solo desde el 30. Sin igualar las filas, la comparación no es válida.
-- **Dos métricas:** `rmse` y `nasa_asymmetric_score`.
+- **Dos métricas:** `rmse` y `nasa_asymmetric_score`, con las predicciones recortadas a `[0, 125]`.
+- **`val_last_cycle` no es un espejo de Test.** Las trayectorias de Val llegan hasta la falla, así que su último ciclo tiene siempre RUL 0: todo error es tardío y el valor resulta muy optimista. En Test, en cambio, el RUL va de 7 a 145.
+- **`val_truncated` sí lo aproxima.** Es el valor esperado de las métricas si cada motor de Val se cortara en un ciclo al azar `>= 30`. Se calcula de forma exacta, sin sorteo: se promedia dentro de cada motor y se agrega entre motores.
 - **Dos variantes en Test:** contra `rul` (recortado, métrica principal) y contra `rul_raw` (sin recortar). Once motores superan los 125 ciclos y no pueden acertarse en la segunda.
-- **Cuidado con el score en Val.** Es una suma sobre 3.490 filas y no es comparable con el de Test, que suma 100.
+- **Cuidado con el score en Val.** Es una suma: en `val_all` acumula 4.070 filas, en `val_truncated` 20 motores y en Test 100. Solo se comparan scores con el mismo `n`.
 
 ---
 
