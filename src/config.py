@@ -12,6 +12,7 @@ Resolución de la raíz de almacenamiento (`STORAGE_ROOT`), por prioridad:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -138,14 +139,26 @@ def metadata_path(subset: str = DEFAULT_SUBSET) -> Path:
     return PROCESSED_DIR / f"etl_metadata_{validate_subset(subset)}.json"
 
 
-def model_path(name: str, subset: str = DEFAULT_SUBSET, ext: str = "pt") -> Path:
+def run_name(name: str, subset: str = DEFAULT_SUBSET, tag: str = "") -> str:
+    """Nombre base de una corrida: `lstm_FD001` o, con tag, `lstm_FD001_asym`."""
+    if tag and not re.fullmatch(r"[A-Za-z0-9_-]+", tag):
+        raise ValueError(
+            f"tag inválido: {tag!r}. Solo letras, números, guiones y guiones bajos"
+        )
+    base = f"{name}_{validate_subset(subset)}"
+    return f"{base}_{tag}" if tag else base
+
+
+def model_path(
+    name: str, subset: str = DEFAULT_SUBSET, ext: str = "pt", tag: str = ""
+) -> Path:
     """Ruta de un modelo entrenado, p. ej. `models/lstm_FD001.pt`."""
-    return MODELS_DIR / f"{name}_{validate_subset(subset)}.{ext}"
+    return MODELS_DIR / f"{run_name(name, subset, tag)}.{ext}"
 
 
-def metrics_path(name: str, subset: str = DEFAULT_SUBSET) -> Path:
+def metrics_path(name: str, subset: str = DEFAULT_SUBSET, tag: str = "") -> Path:
     """Ruta del reporte de métricas, p. ej. `metrics/xgb_baseline_FD001.json`."""
-    return METRICS_DIR / f"{name}_{validate_subset(subset)}.json"
+    return METRICS_DIR / f"{run_name(name, subset, tag)}.json"
 
 
 def ensure_directories() -> None:

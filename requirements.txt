@@ -2,6 +2,7 @@ kagglehub
 numpy
 pandas
 pyarrow
+scipy
 scikit-learn
 xgboost
 torch

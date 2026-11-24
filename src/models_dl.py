@@ -43,7 +43,7 @@ TARGET_SCALE = float(config.RUL_CLIP)
 # Error, en ciclos, a partir del cual la pérdida Huber pasa de cuadrática a lineal
 HUBER_DELTA_CYCLES = 10.0
 
-LOSSES = ("mse", "huber")
+LOSSES = ("mse", "huber", "asymmetric")
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,7 @@ class TrainConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
     loss: str = "mse"
+    late_weight: float = 2.0  # solo se usa con loss="asymmetric"
     patience: int = 10
     lr_patience: int = 4
     lr_factor: float = 0.5
@@ -70,6 +71,10 @@ class TrainConfig:
             )
         if self.loss not in LOSSES:
             raise ValueError(f"loss inválida: {self.loss!r}. Opciones: {LOSSES}")
+        if not (math.isfinite(self.late_weight) and self.late_weight > 0):
+            raise ValueError(
+                f"late_weight debe ser positivo y finito; se recibió {self.late_weight}"
+            )
 
 
 @dataclass
@@ -201,12 +206,42 @@ def get_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def build_loss(name: str) -> nn.Module:
-    """Pérdida sobre el target normalizado. `name` es `mse` o `huber`."""
+class AsymmetricMSELoss(nn.Module):
+    """MSE que multiplica por `late_weight` el error de las predicciones tardías.
+
+        l_i = w_i * (pred_i - target_i)^2,  w_i = late_weight  si pred_i >  target_i
+                                                  1            si pred_i <= target_i
+
+    Promedia sobre el batch sin dividir por la suma de pesos: con `late_weight = 1`
+    coincide con `nn.MSELoss`. Es diferenciable en todo punto, porque ambas ramas
+    tienen gradiente 0 en `pred == target`.
+    """
+
+    def __init__(self, late_weight: float = 2.0) -> None:
+        super().__init__()
+        self.late_weight = late_weight
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if pred.shape != target.shape:
+            raise ValueError(
+                f"Formas distintas: pred={tuple(pred.shape)}, "
+                f"target={tuple(target.shape)}"
+            )
+        squared = (pred - target) ** 2
+        return torch.where(pred > target, self.late_weight * squared, squared).mean()
+
+
+def build_loss(name: str, late_weight: float = 2.0) -> nn.Module:
+    """Pérdida sobre el target normalizado. `name` es una de `LOSSES`.
+
+    `late_weight` solo afecta a `asymmetric`.
+    """
     if name == "mse":
         return nn.MSELoss()
     if name == "huber":
         return nn.HuberLoss(delta=HUBER_DELTA_CYCLES / TARGET_SCALE)
+    if name == "asymmetric":
+        return AsymmetricMSELoss(late_weight)
     raise ValueError(f"loss inválida: {name!r}. Opciones: {LOSSES}")
 
 
@@ -254,7 +289,10 @@ def predict(
     return torch.cat(trues).numpy(), np.clip(y_pred, 0.0, config.RUL_CLIP)
 
 
-def _score(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float | int]:
+def score_predictions(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> dict[str, float | int]:
+    """Métricas por fila, con el formato que usan los reportes."""
     return {
         "n": len(y_true),
         "rmse": rmse(y_true, y_pred),
@@ -269,16 +307,35 @@ def _score_truncated(
     return truncated_metrics(*predict(model, loader, device), loader.dataset.unit_ids)
 
 
-def save_checkpoint(model: nn.Module, path: Path) -> None:
-    """Guarda el `state_dict`; un corte a mitad de escritura no pisa el anterior."""
+def save_checkpoint(model: nn.Module, path: Path, metadata: dict[str, Any]) -> None:
+    """Guarda pesos y metadata; un corte a mitad de escritura no pisa el anterior.
+
+    `metadata` solo puede tener tipos básicos de Python: el archivo se lee con
+    `weights_only=True`.
+    """
     tmp = path.with_name(f"{path.name}.tmp")
-    torch.save(model.state_dict(), tmp)
+    torch.save({"metadata": metadata, "state_dict": model.state_dict()}, tmp)
     tmp.replace(path)
+
+
+def read_checkpoint(
+    path: Path, device: torch.device
+) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None]:
+    """Devuelve `(state_dict, metadata)` de un checkpoint.
+
+    `metadata` es `None` en los checkpoints anteriores a su incorporación, que
+    contienen solo el `state_dict`.
+    """
+    payload = torch.load(path, map_location=device, weights_only=True)
+    if "state_dict" not in payload:
+        return payload, None
+    return payload["state_dict"], payload["metadata"]
 
 
 def load_checkpoint(model: nn.Module, path: Path, device: torch.device) -> None:
     """Carga en `model` los pesos guardados por `save_checkpoint`."""
-    model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
+    state_dict, _ = read_checkpoint(path, device)
+    model.load_state_dict(state_dict)
 
 
 def train_model(
@@ -287,17 +344,20 @@ def train_model(
     val_loader: DataLoader,
     train_config: TrainConfig,
     checkpoint_path: Path,
+    checkpoint_metadata: dict[str, Any],
 ) -> TrainHistory:
     """Entrena con early stopping por RMSE de `val_truncated`.
 
-    Guarda el `state_dict` en cada mejora (Colab puede cortar la sesión) y al
-    terminar deja cargados en `model` los mejores pesos.
+    Guarda un checkpoint en cada mejora (Colab puede cortar la sesión) y al terminar
+    deja cargados en `model` los mejores pesos. El criterio es el RMSE cualquiera sea
+    la pérdida, para que las corridas sean comparables.
 
     Args:
         val_loader: el loader `val_truncated`; nunca uno de Test.
+        checkpoint_metadata: lo necesario para reconstruir el modelo desde el archivo.
     """
     device = next(model.parameters()).device
-    loss_fn = build_loss(train_config.loss)
+    loss_fn = build_loss(train_config.loss, train_config.late_weight)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=train_config.learning_rate,
@@ -331,7 +391,7 @@ def train_model(
         if improved:
             best_rmse = val["rmse"]
             history.best_epoch = epoch
-            save_checkpoint(model, checkpoint_path)
+            save_checkpoint(model, checkpoint_path, checkpoint_metadata)
         logger.info(
             "Época %3d/%d | train_loss=%.5f | val_truncated rmse=%.2f score=%.1f | "
             "lr=%.1e%s",
@@ -359,11 +419,11 @@ def evaluate_model(
     """
     test_true, test_pred = predict(model, loaders.test_last, device)
     return {
-        "val_all": _score(*predict(model, loaders.val_all, device)),
-        "val_last_cycle": _score(*predict(model, loaders.val_last, device)),
+        "val_all": score_predictions(*predict(model, loaders.val_all, device)),
+        "val_last_cycle": score_predictions(*predict(model, loaders.val_last, device)),
         "val_truncated": _score_truncated(model, loaders.val_truncated, device),
-        "test_last_cycle": _score(test_true, test_pred),
-        "test_last_cycle_raw": _score(loaders.test_last_rul_raw, test_pred),
+        "test_last_cycle": score_predictions(test_true, test_pred),
+        "test_last_cycle_raw": score_predictions(loaders.test_last_rul_raw, test_pred),
     }
 
 
@@ -371,20 +431,24 @@ def run_training(
     arch: str,
     subset: str = config.DEFAULT_SUBSET,
     train_config: TrainConfig = TrainConfig(),
+    tag: str = "",
 ) -> dict[str, Any]:
     """Carga artefactos, entrena, evalúa y guarda el modelo y el reporte.
 
     Args:
         arch: clave de `MODEL_REGISTRY`.
         subset: subconjunto de C-MAPSS con el ETL ya ejecutado.
+        tag: sufijo de los archivos de salida, para no pisar otra corrida de la misma
+            arquitectura y subset.
 
     Returns:
-        El mismo reporte que se guarda en `metrics/<arch>_<subset>.json`.
+        El mismo reporte que se guarda en `metrics/<arch>_<subset>[_<tag>].json`.
     """
     if arch not in MODEL_REGISTRY:
         raise ValueError(
             f"Arquitectura desconocida: {arch!r}. Opciones: {sorted(MODEL_REGISTRY)}"
         )
+    name = config.run_name(arch, subset, tag)
     config.ensure_directories()
     seed_everything(train_config.seed)
     device = get_device()
@@ -395,14 +459,23 @@ def run_training(
         seed=train_config.seed,
     )
     model = MODEL_REGISTRY[arch](loaders.num_features).to(device)
-    logger.info("%s %s | dispositivo: %s", arch, subset, device)
+    params = {"model": model.hparams, "train": asdict(train_config)}
+    logger.info("%s | dispositivo: %s", name, device)
 
     history = train_model(
         model,
         loaders.train,
         loaders.val_truncated,
         train_config,
-        config.model_path(arch, subset),
+        config.model_path(arch, subset, tag=tag),
+        checkpoint_metadata={
+            "model": arch,
+            "subset": subset,
+            "tag": tag,
+            "params": params,
+            "rul_clip": config.RUL_CLIP,
+            "feature_cols": loaders.feature_cols,
+        },
     )
     if history.best_epoch == train_config.epochs:
         logger.warning(
@@ -416,8 +489,9 @@ def run_training(
     report = {
         "model": arch,
         "subset": subset,
+        "tag": tag,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "params": {"model": model.hparams, "train": asdict(train_config)},
+        "params": params,
         "rul_clip": config.RUL_CLIP,
         "n_features": loaders.num_features,
         "feature_cols": loaders.feature_cols,
@@ -429,7 +503,7 @@ def run_training(
         "metrics": evaluate_model(model, loaders, device),
         "history": curves,
     }
-    config.metrics_path(arch, subset).write_text(
+    config.metrics_path(arch, subset, tag).write_text(
         json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )
@@ -438,8 +512,9 @@ def run_training(
 
 def format_report(report: dict[str, Any]) -> str:
     """Resumen legible del reporte."""
+    name = config.run_name(report["model"], report["subset"], report["tag"])
     lines = [
-        f"{report['model']} {report['subset']} | {report['n_features']} features | "
+        f"{name} | {report['n_features']} features | "
         f"{report['n_parameters']} parámetros | mejor época: {report['best_epoch']} "
         f"de {report['epochs_run']}",
         f"{'conjunto':<22}{'n':>7}{'RMSE':>9}{'NASA score':>13}",
@@ -466,6 +541,14 @@ def main() -> None:
     )
     parser.add_argument("--window-size", type=int, default=defaults.window_size)
     parser.add_argument("--loss", default=defaults.loss, choices=LOSSES)
+    parser.add_argument(
+        "--late-weight", type=float, default=defaults.late_weight,
+        help="peso del error tardío; solo se usa con --loss asymmetric",
+    )
+    parser.add_argument(
+        "--tag", default="",
+        help="sufijo del checkpoint y del reporte, para no pisar otra corrida",
+    )
     args = parser.parse_args()
 
     report = run_training(
@@ -477,8 +560,10 @@ def main() -> None:
             window_size=args.window_size,
             learning_rate=args.lr,
             loss=args.loss,
+            late_weight=args.late_weight,
             patience=args.patience,
         ),
+        tag=args.tag,
     )
     print(format_report(report))
 

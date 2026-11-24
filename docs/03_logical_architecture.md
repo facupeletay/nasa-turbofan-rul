@@ -16,6 +16,7 @@ flowchart TB
     subgraph MOD["Capa de modelado"]
         XGB["baseline_xgb"]
         DL["models_dl"]
+        ENS["ensemble"]
     end
     subgraph DAT["Capa de datos"]
         ETL["etl"]
@@ -29,8 +30,13 @@ flowchart TB
     NB --> ETL
     NB --> XGB
     NB --> DL
+    NB --> ENS
     XGB --> ETL
     XGB --> MET
+    ENS --> DL
+    ENS --> DS
+    ENS --> MET
+    ENS --> CFG
     DL --> DS
     DL --> MET
     ETL --> CFG
@@ -47,6 +53,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 - `metrics` solo depende de NumPy y `config`: se puede probar sin PyTorch, XGBoost ni datos.
 - `etl` no conoce ningún modelo.
 - `baseline_xgb` y `models_dl` no se conocen entre sí. Comparten datos y métricas, nada más.
+- `ensemble` usa modelos ya entrenados por `models_dl`; no entrena ni modifica ninguno.
 - El notebook **orquesta, no implementa**. Si una celda crece, su lógica pasa a `src/`.
 
 | Módulo | Estado | Dependencias externas |
@@ -57,6 +64,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 | `dataset` | ✅ | numpy, pandas, torch |
 | `baseline_xgb` | ✅ | pandas, xgboost |
 | `models_dl` | ✅ | numpy, torch |
+| `ensemble` | ✅ | numpy, scipy, torch |
 
 ---
 
@@ -184,11 +192,11 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 |---|---|
 | **Responsabilidad** | Arquitecturas secuenciales y su entrenamiento |
 | **Entradas** | `RULDataLoaders`, vía `create_dataloaders(subset)`; `TrainConfig` |
-| **Salidas** | `models/{lstm,cnn1d}_FD001.pt` (solo el `state_dict` de la mejor época) y `metrics/{lstm,cnn1d}_FD001.json` (métricas, hiperparámetros, mejor época y curvas) |
-| **Funciones** | `seed_everything`, `get_device`, `build_loss`, `train_one_epoch`, `predict`, `save_checkpoint`, `load_checkpoint`, `train_model`, `evaluate_model`, `run_training`; clases `LSTMRegressor` y `CNN1DRegressor` |
-| **Entrenamiento** | AdamW, gradient clipping a norma 1, `ReduceLROnPlateau`; pérdida MSE o Huber (`δ` = 10 ciclos) |
+| **Salidas** | `models/{arch}_{subset}[_{tag}].pt` (pesos de la mejor época y metadata para reconstruir el modelo) y `metrics/{arch}_{subset}[_{tag}].json` (métricas, hiperparámetros, mejor época y curvas) |
+| **Funciones** | `seed_everything`, `get_device`, `build_loss`, `train_one_epoch`, `predict`, `score_predictions`, `save_checkpoint`, `read_checkpoint`, `load_checkpoint`, `train_model`, `evaluate_model`, `run_training`; clases `LSTMRegressor`, `CNN1DRegressor` y `AsymmetricMSELoss` |
+| **Entrenamiento** | AdamW, gradient clipping a norma 1, `ReduceLROnPlateau`; pérdida MSE, Huber (`δ` = 10 ciclos) o asimétrica |
 | **Anti-leakage** | Scheduler, early stopping y checkpoint por RMSE de `val_truncated`; Test se evalúa una vez, con el mejor checkpoint |
-| **CLI** | `--arch`, `--subset`, `--epochs`, `--batch-size`, `--lr`, `--patience`, `--window-size`, `--loss` |
+| **CLI** | `--arch`, `--subset`, `--epochs`, `--batch-size`, `--lr`, `--patience`, `--window-size`, `--loss`, `--late-weight`, `--tag` |
 
 ```
  LSTMRegressor                               CNN1DRegressor
@@ -212,7 +220,39 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 
 **Escala del target.** Las redes trabajan en `RUL / 125` y multiplican por 125 antes de devolver, así que su salida está en ciclos; la pérdida se calcula en la escala normalizada. Con el target en ciclos, en FD001 el gradient clipping actuaba en el 100 % de los pasos y la LSTM quedaba en RMSE ≈ 41,6 de `val_truncated` (predecir la media) entre las épocas 5 y 13, lo bastante como para que el early stopping la corte.
 
-**Sesgo de selección.** Como la época se elige por el RMSE de `val_truncated`, ese valor queda algo optimista: la estimación limpia es `test_last_cycle`. Cada corrida sobrescribe el `.pt` y el `.json` de su arquitectura y subset.
+**Sesgo de selección.** Como la época se elige por el RMSE de `val_truncated`, ese valor queda algo optimista: la estimación limpia es `test_last_cycle`.
+
+**Pérdida asimétrica.** `AsymmetricMSELoss` multiplica por `late_weight` (2,0 por defecto) el error cuadrático de las predicciones tardías (`pred > target`); las demás pesan 1. Acerca el entrenamiento al criterio del NASA score sin su crecimiento exponencial, a costa de sesgar las predicciones hacia lo temprano. El checkpoint se elige igual por RMSE de `val_truncated`, cualquiera sea la pérdida.
+
+**Checkpoint.** El `.pt` contiene `state_dict` y `metadata` (arquitectura, subset, tag, hiperparámetros del modelo y del entrenamiento, `rul_clip` y `feature_cols`), con tipos básicos para poder leerlo con `weights_only=True`. Los anteriores a este formato contienen solo el `state_dict`: `ensemble` toma su metadata del `.json` de la corrida, que debe conservarse.
+
+**Tag.** Dos corridas con la misma arquitectura, subset y tag se sobrescriben. `--tag` las separa, por ejemplo `lstm_FD001_asym`.
+
+### 3.7 `ensemble` ✅
+
+| | |
+|---|---|
+| **Responsabilidad** | Combinar redes ya entrenadas con pesos convexos |
+| **Entradas** | Nombres base de checkpoints en `models/` (p. ej. `lstm_FD001_asym`) y los loaders de cada `window_size` |
+| **Salidas** | `metrics/ensemble_{subset}.json`: pesos, miembros y métricas de cada modelo y del ensemble |
+| **Funciones** | `load_members`, `collect_predictions`, `combine`, `optimize_weights`, `evaluate_ensemble`, `run_ensemble`; clases `Member` y `EvalSet` |
+| **Anti-leakage** | `optimize_weights` recibe solo `val_truncated`; Test se predice con los pesos ya fijados |
+| **Validaciones** | Mismo subset, `rul_clip` y `feature_cols` que los datos actuales; filas alineadas entre modelos |
+| **CLI** | `--subset`, `--models`, `--optimize {rmse,score}` |
+
+```
+ lstm_FD001       ─► pred₁ ─┐
+ lstm_FD001_asym  ─► pred₂ ─┼─► Σ wᵢ · predᵢ ─► recorte a [0, 125] ─► (n,)
+ cnn1d_FD001      ─► pred₃ ─┘       ▲
+                                    │ wᵢ ≥ 0, Σ wᵢ = 1
+                     SLSQP sobre val_truncated
+```
+
+**Pesos.** El RMSE y el NASA score son convexos en los pesos, así que SLSQP no tiene mínimos locales. El resultado se compara con cada modelo por separado y con el promedio simple, de modo que **en `val_truncated`** nunca es peor que ellos. Esa garantía no se extiende a Test.
+
+**Ventanas distintas.** Los miembros pueden tener distinto `window_size`. Solo `val_all` cambia de filas con la ventana: se evalúa en las comunes, por lo que puede diferir del reporte individual.
+
+**Sesgo de selección.** `val_truncated` ya eligió la época de cada miembro y además ajusta los pesos, con solo 20 motores: su valor para el ensemble es optimista. Qué modelos combinar y con qué `--optimize` también debe decidirse con Val; elegirlos mirando Test sería leakage. Cada corrida sobrescribe el reporte de su subset.
 
 ---
 
@@ -227,6 +267,7 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 | `baseline_xgb` | Rolling centrado o sin agrupar | `groupby(unit_id)` y sin `center=True` |
 | `baseline_xgb`, `models_dl` | Identificadores o targets como features | Solo se usa `feature_cols` |
 | `models_dl` | Elegir la época según Test | Scheduler, early stopping y checkpoint solo con `val_truncated` |
+| `ensemble` | Ajustar los pesos según Test | `optimize_weights` recibe solo `val_truncated` |
 
 ---
 
