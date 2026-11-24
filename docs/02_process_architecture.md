@@ -2,7 +2,7 @@
 
 Describe **cómo fluyen los datos** desde Kaggle hasta un modelo evaluado y **dónde se ejecuta** cada etapa. La física que motiva las decisiones está en [01](01_domain_theory.md); los contratos de cada módulo, en [03](03_logical_architecture.md).
 
-> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py` y `src/baseline_xgb.py` están implementados; los demás módulos tienen firmas y docstrings, y se implementan paso a paso.
+> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py` y `src/baseline_xgb.py` están implementados; `src/models_dl.py` tiene firmas y docstrings.
 
 ---
 
@@ -180,7 +180,7 @@ Se calcula **solo en Train** y se aplica la misma lista a Val y Test. En FD001 s
 | Auditable | Sí, es una tabla legible | No |
 | Fuente de verdad | Una | Dos, que pueden desincronizarse |
 
-Cada fila se repite hasta 30 veces en los tensores. Armar una ventana es un *slice* sobre memoria contigua, con costo despreciable frente al paso por la red. El ahorro es modesto en FD001, pero el argumento de fondo es el de **flexibilidad y fuente única**.
+Cada fila se repite hasta 30 veces en los tensores. Por eso los tensores se arman en RAM al crear los DataLoaders y **nunca se persisten**: construirlos toma menos de un segundo en FD001. El ahorro es modesto en FD001, pero el argumento de fondo es el de **flexibilidad y fuente única**.
 
 ---
 
@@ -194,7 +194,7 @@ Cada fila se repite hasta 30 veces en los tensores. Armar una ventana es un *sli
 | `test_last_cycle` | **Último ciclo de cada motor de Test** (100) | Métrica oficial, reporte final |
 | `test_last_cycle_raw` | Igual, contra el RUL sin recortar | Reporte complementario |
 
-- **Mismas filas para todos los modelos.** XGBoost puede predecir desde el ciclo 1 y las redes solo desde el 30. Sin igualar las filas, la comparación no es válida.
+- **Mismas filas para todos los modelos.** XGBoost predice desde el ciclo 1 y las redes recién con una ventana completa, así que **`val_all` no es comparable entre ambos** (4.070 filas contra 3.490 ventanas). La comparación se hace con `val_truncated`, que usa las mismas filas y la misma función (`metrics.truncated_metrics`), y con los conjuntos de último ciclo.
 - **Dos métricas:** `rmse` y `nasa_asymmetric_score`, con las predicciones recortadas a `[0, 125]`.
 - **`val_last_cycle` no es un espejo de Test.** Las trayectorias de Val llegan hasta la falla, así que su último ciclo tiene siempre RUL 0: todo error es tardío y el valor resulta muy optimista. En Test, en cambio, el RUL va de 7 a 145.
 - **`val_truncated` sí lo aproxima.** Es el valor esperado de las métricas si cada motor de Val se cortara en un ciclo al azar `>= 30`. Se calcula de forma exacta, sin sorteo: se promedia dentro de cada motor y se agrega entre motores.

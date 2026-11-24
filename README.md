@@ -9,8 +9,8 @@ Dado el historial de sensores de un motor, el objetivo es predecir **cuántos ci
 | Componente | Estado |
 |---|---|
 | Documentación de dominio y arquitectura | ✅ Completa |
-| `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/baseline_xgb.py` | ✅ Implementados |
-| `src/dataset.py`, `src/models_dl.py` | 🚧 Firmas y contratos definidos |
+| `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py` | ✅ Implementados |
+| `src/models_dl.py` | 🚧 Firmas y contratos definidos |
 | `notebooks/colab_runner.ipynb` | 🚧 Preparación, ETL y baseline funcionales; el resto depende de los módulos anteriores |
 
 ## Documentación

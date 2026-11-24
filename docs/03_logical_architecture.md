@@ -35,6 +35,7 @@ flowchart TB
     DL --> ETL
     DL --> MET
     ETL --> CFG
+    DS --> ETL
     DS --> CFG
     XGB --> CFG
     DL --> CFG
@@ -54,7 +55,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 | `config` | ✅ | Ninguna |
 | `metrics` | ✅ | numpy |
 | `etl` | ✅ | kagglehub, pandas, pyarrow, scikit-learn, joblib |
-| `dataset` | 🚧 | numpy, pandas, torch |
+| `dataset` | ✅ | numpy, pandas, torch |
 | `baseline_xgb` | ✅ | pandas, xgboost |
 | `models_dl` | 🚧 | numpy, torch |
 
@@ -121,13 +122,14 @@ Si un modelo devuelve `(B, 1)` y el target es `(B,)`, tanto NumPy como PyTorch h
 
 Las funciones de Transform son puras: reciben y devuelven DataFrames, sin leer ni escribir disco. Así se prueban con datos sintéticos.
 
-### 3.3 `dataset` 🚧
+### 3.3 `dataset` ✅
 
 | | |
 |---|---|
 | **Responsabilidad** | De tabla 2D a tensores 3D |
-| **Entradas** | DataFrame procesado, `feature_cols`, `window_size` |
-| **Salidas** | `DataLoader` que emite `(B, W, F)` y `(B,)`; `make_last_windows` para Test |
+| **Entradas** | Artefactos del ETL, vía `load_artifacts(subset)`; `window_size`, `batch_size`, `stride`, `seed` |
+| **Salidas** | `RULDataLoaders`: loaders que emiten `(B, W, F)` y `(B,)`, más `num_features`, `window_size`, `feature_cols` y `test_last_rul_raw` |
+| **Funciones** | `build_sliding_windows`, `build_last_windows`, `build_truncated_windows`, `create_dataloaders`; clase `RULWindowDataset` |
 | **Anti-leakage** | La ventana no cruza motores ni mira el futuro; se arma después del split |
 
 ```
@@ -141,9 +143,19 @@ Las funciones de Transform son puras: reciben y devuelven DataFrames, sin leer n
  ventana 5:             [━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━] y = RUL(34)
 ```
 
-En FD001 resultan **14.241 ventanas de Train y 3.490 de Val**. El `shuffle` mezcla ventanas enteras dentro de Train y nunca los pasos dentro de una ventana.
+| Loader | Ventanas en FD001 | Shuffle | Uso |
+|---|---|---|---|
+| `train` | 14.241 | Sí, semilla fija | Entrenamiento |
+| `val_all` | 3.490 | No | Early stopping |
+| `val_last` | 20 | No | `val_last_cycle` |
+| `val_truncated` | 3.490 | No | Comparación con XGBoost |
+| `test_last` | 100 | No | `test_last_cycle` |
 
-**Motores cortos.** El motor más corto de Test tiene 31 ciclos en FD001, 21 en FD002, 38 en FD003 y 19 en FD004. Con `W = 30` hay 6 motores de FD002 y 11 de FD004 que requieren relleno a la izquierda.
+Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difieren en la agregación. Con otro `W`, `val_truncated` sigue cubriendo los ciclos `>= 30`, las mismas filas que evalúa el baseline.
+
+`stride` afecta solo a `train`. Con `stride > 1` las ventanas se anclan al final de cada motor para no perder los ciclos más cercanos a la falla. El `shuffle` mezcla ventanas enteras dentro de Train y nunca los pasos dentro de una ventana.
+
+**Motores cortos.** El motor más corto de Test tiene 31 ciclos en FD001, 21 en FD002, 38 en FD003 y 19 en FD004. Con `W = 30` hay 6 motores de FD002 y 11 de FD004 que requieren relleno a la izquierda. Se repite el primer ciclo del motor (*edge padding*): rellenar con ceros equivaldría, tras el escalado, a todos los sensores en su mínimo, un estado físico inexistente.
 
 ### 3.4 `metrics` ✅
 
@@ -151,7 +163,7 @@ En FD001 resultan **14.241 ventanas de Train y 3.490 de Val**. El `shuffle` mezc
 |---|---|
 | **Responsabilidad** | Medir el error de predicción |
 | **Entradas** | `y_true`, `y_pred` con forma `(n,)` o `(n, 1)`, en ciclos |
-| **Salidas** | `rmse(...) -> float`, `nasa_asymmetric_score(...) -> float` |
+| **Salidas** | `rmse(...) -> float`, `nasa_asymmetric_score(...) -> float`, `truncated_metrics(...) -> dict` (requiere además `unit_ids`) |
 | **Validaciones** | Falla ante formas incompatibles, vacíos, NaN o infinitos |
 | **Convención** | `d = y_pred − y_true`; `d > 0` es tardía |
 

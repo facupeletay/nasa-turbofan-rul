@@ -77,3 +77,36 @@ def nasa_asymmetric_score(
     d = _prediction_error(y_true, y_pred)
     exponent = np.where(d < 0, -d / a_early, d / a_late)
     return float(np.sum(np.expm1(exponent)))
+
+
+def truncated_metrics(
+    y_true: ArrayLike, y_pred: ArrayLike, unit_ids: ArrayLike
+) -> dict[str, float | int]:
+    """Métricas esperadas si cada motor se truncara en un ciclo al azar.
+
+    Test se evalúa en un ciclo anterior a la falla, mientras que el último ciclo de
+    Val siempre tiene RUL 0. Aquí cada motor puede cortarse en cualquiera de las filas
+    recibidas con igual probabilidad. Se calcula la esperanza exacta, sin sorteo: se
+    promedia dentro de cada motor y luego se agrega entre motores.
+
+    El llamador elige las filas. Para comparar modelos deben ser las mismas:
+    `cycle >= WINDOW_SIZE`.
+    """
+    true, pred, units = (np.asarray(a).reshape(-1) for a in (y_true, y_pred, unit_ids))
+    if not len(true) == len(pred) == len(units):
+        raise ValueError(
+            f"Longitudes distintas: y_true={len(true)}, y_pred={len(pred)}, "
+            f"unit_ids={len(units)}"
+        )
+    mse_by_unit, score_by_unit = [], []
+    for unit in np.unique(units):
+        mask = units == unit
+        mse_by_unit.append(rmse(true[mask], pred[mask]) ** 2)
+        score_by_unit.append(nasa_asymmetric_score(true[mask], pred[mask]) / mask.sum())
+    if not mse_by_unit:
+        raise ValueError("No hay filas para evaluar")
+    return {
+        "n": len(mse_by_unit),
+        "rmse": float(np.sqrt(np.mean(mse_by_unit))),
+        "nasa_score": float(np.sum(score_by_unit)),
+    }

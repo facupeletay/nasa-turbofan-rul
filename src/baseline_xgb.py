@@ -22,7 +22,7 @@ from xgboost import XGBRegressor
 
 from src import config
 from src.etl import load_artifacts
-from src.metrics import nasa_asymmetric_score, rmse
+from src.metrics import nasa_asymmetric_score, rmse, truncated_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -143,30 +143,6 @@ def _score(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float | int]:
     }
 
 
-def _score_truncated(val: pd.DataFrame, y_pred: np.ndarray) -> dict[str, float | int]:
-    """Métricas esperadas si cada motor de Val se truncara en un ciclo al azar.
-
-    Test se evalúa en un ciclo anterior a la falla, mientras que el último ciclo de
-    Val siempre tiene RUL 0. Aquí cada motor puede cortarse en cualquier ciclo
-    `>= WINDOW_SIZE` con igual probabilidad. Se calcula la esperanza exacta, sin
-    sorteo: se promedia dentro de cada motor y luego se agrega entre motores.
-    """
-    eligible = (val[config.CYCLE_COL] >= config.WINDOW_SIZE).to_numpy()
-    mse_by_unit, score_by_unit = [], []
-    for unit in val[config.UNIT_COL].unique():
-        mask = eligible & (val[config.UNIT_COL] == unit).to_numpy()
-        if not mask.any():
-            continue
-        y_true = val.loc[mask, config.TARGET_COL]
-        mse_by_unit.append(rmse(y_true, y_pred[mask]) ** 2)
-        score_by_unit.append(nasa_asymmetric_score(y_true, y_pred[mask]) / mask.sum())
-    return {
-        "n": len(mse_by_unit),
-        "rmse": float(np.sqrt(np.mean(mse_by_unit))),
-        "nasa_score": float(np.sum(score_by_unit)),
-    }
-
-
 def evaluate_xgb(
     model: XGBRegressor,
     val: pd.DataFrame,
@@ -188,6 +164,7 @@ def evaluate_xgb(
     """
     val_pred = predict_rul(model, val, model_feature_cols)
     val_last = last_cycle_mask(val)
+    val_eligible = (val[config.CYCLE_COL] >= config.WINDOW_SIZE).to_numpy()
 
     test_last = test[last_cycle_mask(test)]
     test_pred = predict_rul(model, test_last, model_feature_cols)
@@ -197,7 +174,11 @@ def evaluate_xgb(
         "val_last_cycle": _score(
             val.loc[val_last, config.TARGET_COL], val_pred[val_last]
         ),
-        "val_truncated": _score_truncated(val, val_pred),
+        "val_truncated": truncated_metrics(
+            val.loc[val_eligible, config.TARGET_COL],
+            val_pred[val_eligible],
+            val.loc[val_eligible, config.UNIT_COL],
+        ),
         "test_last_cycle": _score(test_last[config.TARGET_COL], test_pred),
         "test_last_cycle_raw": _score(test_last[config.TARGET_RAW_COL], test_pred),
     }
