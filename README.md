@@ -9,9 +9,8 @@ Dado el historial de sensores de un motor, el objetivo es predecir **cuántos ci
 | Componente | Estado |
 |---|---|
 | Documentación de dominio y arquitectura | ✅ Completa |
-| `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py` | ✅ Implementados |
-| `src/models_dl.py` | 🚧 Firmas y contratos definidos |
-| `notebooks/colab_runner.ipynb` | 🚧 Preparación, ETL y baseline funcionales; el resto depende de los módulos anteriores |
+| `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py`, `src/models_dl.py` | ✅ Implementados |
+| `notebooks/colab_runner.ipynb` | 🚧 Preparación, ETL, baseline y redes; EDA pendiente |
 
 ## Documentación
 
@@ -90,6 +89,7 @@ pip install -r requirements.txt
 python -m src.config           # Muestra las rutas activas
 python -m src.etl              # ETL de FD001 (--subset para otro)
 python -m src.baseline_xgb     # Baseline XGBoost (--help para ver opciones)
+python -m src.models_dl --arch lstm   # o cnn1d (--help para ver opciones)
 ```
 
 Para guardar datos y modelos en otra ubicación, definir la variable de entorno `NASA_RUL_ROOT`.

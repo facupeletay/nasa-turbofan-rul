@@ -32,7 +32,6 @@ flowchart TB
     XGB --> ETL
     XGB --> MET
     DL --> DS
-    DL --> ETL
     DL --> MET
     ETL --> CFG
     DS --> ETL
@@ -57,7 +56,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 | `etl` | ✅ | kagglehub, pandas, pyarrow, scikit-learn, joblib |
 | `dataset` | ✅ | numpy, pandas, torch |
 | `baseline_xgb` | ✅ | pandas, xgboost |
-| `models_dl` | 🚧 | numpy, torch |
+| `models_dl` | ✅ | numpy, torch |
 
 ---
 
@@ -146,9 +145,9 @@ Las funciones de Transform son puras: reciben y devuelven DataFrames, sin leer n
 | Loader | Ventanas en FD001 | Shuffle | Uso |
 |---|---|---|---|
 | `train` | 14.241 | Sí, semilla fija | Entrenamiento |
-| `val_all` | 3.490 | No | Early stopping |
+| `val_all` | 3.490 | No | Rendimiento general |
 | `val_last` | 20 | No | `val_last_cycle` |
-| `val_truncated` | 3.490 | No | Comparación con XGBoost |
+| `val_truncated` | 3.490 | No | Early stopping, checkpoint y comparación con XGBoost |
 | `test_last` | 100 | No | `test_last_cycle` |
 
 Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difieren en la agregación. Con otro `W`, `val_truncated` sigue cubriendo los ciclos `>= 30`, las mismas filas que evalúa el baseline.
@@ -179,18 +178,21 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 | **Anti-leakage** | Rolling causal y por motor; sin `unit_id`, `cycle` ni RUL como features; early stopping sobre Val |
 | **CLI** | `--subset`, `--n-estimators`, `--max-depth`, `--learning-rate`, `--windows` |
 
-### 3.6 `models_dl` 🚧
+### 3.6 `models_dl` ✅
 
 | | |
 |---|---|
 | **Responsabilidad** | Arquitecturas secuenciales y su entrenamiento |
-| **Entradas** | `DataLoader` con `(B, W, F)` y `(B,)`; `TrainConfig` |
-| **Salidas** | `models/{lstm,cnn1d}_FD001.pt`, `TrainHistory` y métricas |
-| **Anti-leakage** | Checkpoint y early stopping por RMSE de Val |
+| **Entradas** | `RULDataLoaders`, vía `create_dataloaders(subset)`; `TrainConfig` |
+| **Salidas** | `models/{lstm,cnn1d}_FD001.pt` (solo el `state_dict` de la mejor época) y `metrics/{lstm,cnn1d}_FD001.json` (métricas, hiperparámetros, mejor época y curvas) |
+| **Funciones** | `seed_everything`, `get_device`, `build_loss`, `train_one_epoch`, `predict`, `save_checkpoint`, `load_checkpoint`, `train_model`, `evaluate_model`, `run_training`; clases `LSTMRegressor` y `CNN1DRegressor` |
+| **Entrenamiento** | AdamW, gradient clipping a norma 1, `ReduceLROnPlateau`; pérdida MSE o Huber (`δ` = 10 ciclos) |
+| **Anti-leakage** | Scheduler, early stopping y checkpoint por RMSE de `val_truncated`; Test se evalúa una vez, con el mejor checkpoint |
+| **CLI** | `--arch`, `--subset`, `--epochs`, `--batch-size`, `--lr`, `--patience`, `--window-size`, `--loss` |
 
 ```
- TurbofanLSTM                                TurbofanCNN1D
- ────────────                                ─────────────
+ LSTMRegressor                               CNN1DRegressor
+ ─────────────                               ──────────────
  (B, 30, 15)                                 (B, 30, 15)
      │                                           │ permute(0, 2, 1)
      ▼                                           ▼
@@ -198,15 +200,19 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
      │                                           │ Conv1d 32 → 64 → 64, k = 5
      ▼                                           ▼
  (B, 30, 64)                                 (B, 64, 30)
-     │ último paso temporal                      │ pooling global
+     │ último paso temporal                      │ AdaptiveAvgPool1d(1)
      ▼                                           ▼
  (B, 64)                                     (B, 64)
-     │ MLP                                       │ MLP
+     │ MLP 64 → 32 → 1, × 125                    │ MLP 64 → 32 → 1, × 125
      ▼                                           ▼
  (B,)                                        (B,)
 ```
 
-`nn.LSTM` se usa con `batch_first=True`. `nn.Conv1d` espera los canales en el eje 1, de ahí el `permute`, que ocurre **dentro** del modelo para mantener un único contrato de entrada.
+`nn.LSTM` se usa con `batch_first=True`. `nn.Conv1d` espera los canales en el eje 1, de ahí el `permute`, que ocurre **dentro** del modelo para mantener un único contrato de entrada. Cada bloque de la CNN es `Conv1d → BatchNorm1d → ReLU → Dropout`.
+
+**Escala del target.** Las redes trabajan en `RUL / 125` y multiplican por 125 antes de devolver, así que su salida está en ciclos; la pérdida se calcula en la escala normalizada. Con el target en ciclos, en FD001 el gradient clipping actuaba en el 100 % de los pasos y la LSTM quedaba en RMSE ≈ 41,6 de `val_truncated` (predecir la media) entre las épocas 5 y 13, lo bastante como para que el early stopping la corte.
+
+**Sesgo de selección.** Como la época se elige por el RMSE de `val_truncated`, ese valor queda algo optimista: la estimación limpia es `test_last_cycle`. Cada corrida sobrescribe el `.pt` y el `.json` de su arquitectura y subset.
 
 ---
 
@@ -220,7 +226,7 @@ Con `W = 30`, `val_all` y `val_truncated` contienen las mismas ventanas; difiere
 | `dataset` | Ventana con ciclos posteriores a la etiqueta | Ventana `[t − W + 1, t]` con etiqueta en `t` |
 | `baseline_xgb` | Rolling centrado o sin agrupar | `groupby(unit_id)` y sin `center=True` |
 | `baseline_xgb`, `models_dl` | Identificadores o targets como features | Solo se usa `feature_cols` |
-| `models_dl` | Elegir la época según Test | Early stopping solo con Val |
+| `models_dl` | Elegir la época según Test | Scheduler, early stopping y checkpoint solo con `val_truncated` |
 
 ---
 

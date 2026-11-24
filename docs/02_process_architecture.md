@@ -2,7 +2,7 @@
 
 Describe **cómo fluyen los datos** desde Kaggle hasta un modelo evaluado y **dónde se ejecuta** cada etapa. La física que motiva las decisiones está en [01](01_domain_theory.md); los contratos de cada módulo, en [03](03_logical_architecture.md).
 
-> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py` y `src/baseline_xgb.py` están implementados; `src/models_dl.py` tiene firmas y docstrings.
+> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py`, `src/etl.py`, `src/dataset.py`, `src/baseline_xgb.py` y `src/models_dl.py` están implementados.
 
 ---
 
@@ -190,7 +190,7 @@ Cada fila se repite hasta 30 veces en los tensores. Por eso los tensores se arma
 |---|---|---|
 | `val_all` | Todos los ciclos de Val (4.070 en FD001) | Rendimiento general; early stopping del baseline |
 | `val_last_cycle` | Último ciclo de cada motor de Val (20) | Error en el instante de la falla |
-| `val_truncated` | Ciclos `>= 30` de Val (3.490), ponderados por motor | Comparación entre modelos y estimación previa de Test |
+| `val_truncated` | Ciclos `>= 30` de Val (3.490), ponderados por motor | Comparación entre modelos y estimación previa de Test; early stopping de las redes |
 | `test_last_cycle` | **Último ciclo de cada motor de Test** (100) | Métrica oficial, reporte final |
 | `test_last_cycle_raw` | Igual, contra el RUL sin recortar | Reporte complementario |
 
