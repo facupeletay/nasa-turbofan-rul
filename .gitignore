@@ -1,0 +1,16 @@
+# Datos (la fuente de verdad vive en Google Drive)
+data/
+data/**/*.txt
+*.parquet
+
+# Modelos y artefactos entrenados
+models/*.pt
+models/*.json
+models/*.joblib
+
+# Python
+.venv/
+__pycache__/
+
+# Jupyter
+.ipynb_checkpoints/
