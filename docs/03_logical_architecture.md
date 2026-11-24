@@ -53,7 +53,7 @@ Las flechas indican "depende de". **Las dependencias solo apuntan hacia abajo**:
 |---|---|---|
 | `config` | ✅ | Ninguna |
 | `metrics` | ✅ | numpy |
-| `etl` | 🚧 | kagglehub, pandas, pyarrow, scikit-learn, joblib |
+| `etl` | ✅ | kagglehub, pandas, pyarrow, scikit-learn, joblib |
 | `dataset` | 🚧 | numpy, pandas, torch |
 | `baseline_xgb` | 🚧 | pandas, xgboost |
 | `models_dl` | 🚧 | numpy, torch |
@@ -67,7 +67,7 @@ Notación: `B` = batch, `W` = ventana (30), `F` = features (15 en FD001), `N` = 
 | Contrato | Forma | Tipo | Productor → consumidor |
 |---|---|---|---|
 | Tabla cruda | `(N, 26)` | float / int | `.txt` → `etl` |
-| Tabla procesada | `(N, 2 + F + 2)` | float | `etl` → `dataset`, `baseline_xgb` |
+| Tabla procesada | `(N, 2 + F + 2)` | float64 las features, int64 el resto | `etl` → `dataset`, `baseline_xgb` |
 | Matriz tabular | `(N, F · (1 + 3 · n_ventanas))` | float | `baseline_xgb` (interno) |
 | Ventana | `(W, F)` | float32 | `dataset` (interno) |
 | **Batch de entrada** | **`(B, W, F)`** = `(batch_size, window_size, num_features)` | float32 | `dataset` → `models_dl` |
@@ -107,15 +107,17 @@ Si un modelo devuelve `(B, 1)` y el target es `(B,)`, tanto NumPy como PyTorch h
 | **Salidas** | `STORAGE_ROOT` y derivadas; `RUL_CLIP`, `WINDOW_SIZE`, `RAW_COLS`; constructores de rutas |
 | **Regla** | Importarlo no toca el disco. Solo `ensure_directories()` crea carpetas |
 
-### 3.2 `etl` 🚧
+### 3.2 `etl` ✅
 
 | | |
 |---|---|
 | **Responsabilidad** | De Kaggle a tablas limpias, particionadas y escaladas |
 | **Entradas** | Nombre del subset (`"FD001"`) |
 | **Salidas** | `ETLResult(subset, train, val, test, feature_cols, scaler)` y los artefactos en disco |
-| **Funciones** | Extract: `download_dataset`, `backup_raw`, `read_raw_table`, `read_test_rul` · Transform: `add_train_rul`, `add_test_rul`, `split_by_unit`, `select_feature_columns`, `fit_scaler`, `apply_scaler` · Load: `save_artifacts`, `load_artifacts` · `run_etl` |
+| **Funciones** | Extract: `extract`, `download_dataset`, `backup_raw`, `read_raw_table`, `read_test_rul` · Transform: `add_train_rul`, `add_test_rul`, `split_by_unit`, `select_feature_columns`, `fit_scaler`, `apply_scaler` · Load: `save_artifacts`, `load_artifacts` · `run_etl` |
 | **Anti-leakage** | Split por motor; poda y scaler aprendidos solo de Train |
+| **Validaciones** | 26 columnas, sin nulos, ciclos consecutivos. `load_artifacts` falla si los artefactos se generaron con otros parámetros de `config` |
+| **Alcance** | Pensado para FD001. En FD002 y FD004 funciona pero advierte que no normaliza por régimen |
 
 Las funciones de Transform son puras: reciben y devuelven DataFrames, sin leer ni escribir disco. Así se prueban con datos sintéticos.
 

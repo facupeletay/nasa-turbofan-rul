@@ -2,7 +2,7 @@
 
 Describe **cómo fluyen los datos** desde Kaggle hasta un modelo evaluado y **dónde se ejecuta** cada etapa. La física que motiva las decisiones está en [01](01_domain_theory.md); los contratos de cada módulo, en [03](03_logical_architecture.md).
 
-> **Estado.** Este documento es la especificación. `src/config.py` y `src/metrics.py` están implementados; los demás módulos tienen firmas y docstrings, y se implementan paso a paso.
+> **Estado.** Este documento es la especificación. `src/config.py`, `src/metrics.py` y `src/etl.py` están implementados; los demás módulos tienen firmas y docstrings, y se implementan paso a paso.
 
 ---
 
@@ -63,7 +63,7 @@ flowchart LR
 |---|---|
 | Descarga | `kagglehub.dataset_download("behrad3d/nasa-cmaps")` a la caché local de la VM |
 | Ubicación | Los `.txt` están en la subcarpeta `CMaps/`; se localizan con búsqueda recursiva |
-| Respaldo | Copia a `data/raw/` de Drive |
+| Respaldo | Copia de los 12 `.txt` de datos a `data/raw/` de Drive, vía archivo temporal verificado |
 | Inmutabilidad | Nunca se sobrescribe. Si el archivo existe, se compara SHA-256; si difiere, el proceso se detiene |
 | Idempotencia | Si `data/raw/` ya está completo, no se vuelve a descargar |
 
@@ -163,7 +163,7 @@ Se calcula **solo en Train** y se aplica la misma lista a Val y Test. En FD001 s
 | Artefacto | Formato | Contenido |
 |---|---|---|
 | `data/processed/{train,val,test}_FD001.parquet` | Parquet | `unit_id`, `cycle`, features escaladas, `rul`, `rul_raw` |
-| `data/processed/etl_metadata_FD001.json` | JSON | `feature_cols`, motores por split, semilla, `RUL_CLIP`, fecha |
+| `data/processed/etl_metadata_FD001.json` | JSON | `feature_cols`, filas y motores por split, semilla, `RUL_CLIP`, fecha. Se escribe al final: su presencia indica que el ETL terminó |
 | `models/scaler_FD001.joblib` | joblib | Scaler ajustado, indispensable para inferencia |
 
 **Por qué Parquet.** Conserva tipos, comprime por columna y se lee de forma selectiva. Como referencia, la tabla de entrenamiento de FD001 pasa de 3,5 MB en `.txt` a cerca de 0,5 MB.
