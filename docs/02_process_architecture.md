@@ -39,7 +39,8 @@ flowchart LR
 | | Ubicación en Colab | Persistencia | Versionado |
 |---|---|---|---|
 | Código | `/content/nasa-turbofan-rul` (clon de Git) | Efímera, se vuelve a clonar | Git |
-| Datos, modelos, métricas y gráficos | `/content/drive/MyDrive/nasa_rul/` | Permanente | No; se regeneran con el código |
+| Datos, modelos y métricas | `/content/drive/MyDrive/nasa_rul/` | Permanente | No; se regeneran con el código |
+| Gráficos | `/content/drive/MyDrive/nasa_rul/reports/figures/` | Permanente | Solo los oficiales, copiados a `reports/figures/` del repo |
 
 `src/config.py` resuelve la raíz de almacenamiento: variable `NASA_RUL_ROOT` → Drive si es Colab → raíz del repo si es local. El resto del código nunca escribe rutas absolutas.
 

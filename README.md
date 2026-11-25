@@ -52,6 +52,8 @@ Corrida oficial en Google Colab (GPU T4, semilla 42). Menor es mejor; las métri
 
 El ensemble es `0.7825 · LSTM + 0.1938 · LSTM asimétrica + 0.0236 · CNN 1D`, con los pesos ajustados solo en `val_truncated`. Test son 100 motores, evaluados en su último ciclo registrado. La última columna usa el RUL sin el techo de 125 ciclos.
 
+![Barras de RMSE y NASA score de Test por modelo](reports/figures/model_comparison_FD001.png)
+
 ### Análisis
 
 **Por qué la LSTM supera a XGBoost.** Respecto del baseline, la LSTM baja el RMSE de Test un 23.4 % y el NASA score un 63.3 %; con el ensemble, las bajas son de 23.8 % y **63.8 %**.
@@ -72,6 +74,22 @@ Los intervalos son de un bootstrap pareado sobre los 100 motores (20 000 réplic
 **Limitaciones.** El ensemble todavía predice tarde en 60 de los 100 motores, con un error medio de +1.9 ciclos. La LSTM alcanzó su mejor época en la 46 de 50 sin que actuara el early stopping, por lo que podría mejorar con más épocas. Todo proviene de una sola semilla.
 
 **Por qué no hay leakage.** Los pesos se ajustan solo con `val_truncated`, y Test se predice recién con los pesos fijos. El orden de los modelos en `val_truncated` es el mismo que en Test, por lo que elegir por validación lleva a la misma decisión. Los valores de `val_truncated` son algo optimistas, porque ese conjunto también elige la época y los pesos: la estimación limpia es la de Test.
+
+### Gráficos
+
+Los dos primeros corresponden al ensemble, que es el mejor modelo en `val_truncated`.
+
+**RUL real y predicho.** El error absoluto medio es de 2.9 ciclos en los motores con menos de 30 ciclos de RUL y llega a 16.9 entre 60 y 100. El modelo es más preciso cerca de la falla, que es cuando más importa.
+
+![RUL real y predicho de los 100 motores de Test, ordenados por RUL real](reports/figures/rul_pred_vs_true_FD001.png)
+
+**Distribución del error.** En azul, la zona segura (predicción temprana); en rojo, la peligrosa (tardía).
+
+![Histograma del error de Test, con las zonas segura y peligrosa](reports/figures/error_distribution_FD001.png)
+
+**Entrenamiento.** RMSE de `val_truncated` por época; el punto marca el checkpoint guardado.
+
+![RMSE de val_truncated por época de las tres redes](reports/figures/training_curves_FD001.png)
 
 ### Reproducción
 
@@ -124,11 +142,12 @@ nasa-turbofan-rul/
 │   ├── models_dl.py            # LSTM, CNN 1D y entrenamiento
 │   ├── ensemble.py             # Ensemble convexo de las redes
 │   └── visualize.py            # Gráficos de evaluación
+├── reports/figures/            # Gráficos oficiales de FD001
 ├── requirements.txt
 └── README.md
 ```
 
-Los datos, los modelos, las métricas y los gráficos **no se versionan**: viven en `/content/drive/MyDrive/nasa_rul/` y se regeneran con el código.
+Los datos, los modelos y las métricas **no se versionan**: viven en `/content/drive/MyDrive/nasa_rul/` y se regeneran con el código. La excepción son los gráficos oficiales de `reports/figures/`, que se copian al repositorio.
 
 ## Uso
 

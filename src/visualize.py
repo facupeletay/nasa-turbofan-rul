@@ -71,7 +71,10 @@ STYLE = {
     "figure.facecolor": SURFACE,
     "grid.color": GRID,
     "grid.linewidth": 0.8,
-    "legend.frameon": False,
+    "legend.frameon": True,  # fondo liso: la grilla no cruza el texto
+    "legend.facecolor": SURFACE,
+    "legend.edgecolor": "none",
+    "legend.framealpha": 1.0,
     "text.color": INK,
     "xtick.color": INK_SECONDARY,
     "ytick.color": INK_SECONDARY,
